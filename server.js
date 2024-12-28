@@ -14,6 +14,7 @@ await server.register(FastifyVite, {
   renderer: "@fastify/react",
 });
 
+
 await server.vite.ready();
 
 // Returns an ephemeral token to connect to OpenAI Realtime API
