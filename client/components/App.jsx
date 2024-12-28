@@ -7,6 +7,7 @@ export default function App() {
   const [isSessionActive, setIsSessionActive] = useState(false);
   const [events, setEvents] = useState([]);
   const [dataChannel, setDataChannel] = useState(null);
+  const [evaluationResults, setEvaluationResults] = useState([]);
   const peerConnection = useRef(null);
   const audioRef = useRef(null);
 
@@ -92,6 +93,65 @@ export default function App() {
     sendEventToModel({ type: "response.create" });
   }
 
+  async function handleToolCall(event) {
+    // Add logging to debug the event structure
+    console.log('Checking for tool calls in event:', event);
+
+    // Check both response.output and direct tool_calls property
+    const toolCalls = (event.response?.output || event.tool_calls || []).filter(
+      output => (output.type === "function_call" || output.function) && 
+      (output.name === "track_language_evaluation" || output.function?.name === "track_language_evaluation")
+    );
+    
+    console.log('Found tool calls:', toolCalls);
+    
+    for (const call of toolCalls) {
+      try {
+        const args = JSON.parse(call.arguments || call.function?.arguments || '{}');
+        
+        setEvaluationResults(prev => [...prev, {
+          id: call.call_id || crypto.randomUUID(),
+          timestamp: Date.now(),
+          ...args
+        }]);
+
+        // Send acknowledgment back to the model
+        sendEventToModel({
+          type: "conversation.item.create",
+          item: {
+            type: "function_call_output",
+            call_id: call.call_id || call.id,
+            output: JSON.stringify({
+              received: true,
+              timestamp: Date.now()
+            })
+          }
+        });
+      } catch (error) {
+        console.error('Error processing tool call:', error);
+      }
+    }
+  }
+
+  useEffect(() => {
+    if (!dataChannel) return;
+
+    const handleMessage = (e) => {
+      const event = JSON.parse(e.data);
+      setEvents(prev => [event, ...prev]);
+      
+      // Check multiple event types that might contain tool calls
+      if (event.type === "response.done" || 
+          event.type === "response.output_item.done" ||
+          event.type === "function_call") {
+        handleToolCall(event);
+      }
+    };
+
+    dataChannel.addEventListener("message", handleMessage);
+    return () => dataChannel.removeEventListener("message", handleMessage);
+  }, [dataChannel]);
+
   return (
     <div className="w-full h-full">
       <div className="flex w-full h-full">
@@ -116,6 +176,7 @@ export default function App() {
             isSessionActive={isSessionActive}
             sendEventToModel={sendEventToModel}
             events={events}
+            evaluationResults={evaluationResults}
           />
         </div>
       </div>
