@@ -101,15 +101,48 @@ const evaluationTool = {
 export default function EvaluationPanel({ isSessionActive, sendEventToModel, events }) {
   const [toolRegistered, setToolRegistered] = useState(false);
 
-  // On session created from server => we can register our tool
   useEffect(() => {
-    // If not active or already registered, do nothing
     if (!isSessionActive || toolRegistered) return;
 
     // Send the session.update to register the evaluation tool
     sendEventToModel(evaluationTool);
     setToolRegistered(true);
+
+    // Add conversation starter with a small delay
+    setTimeout(() => {
+      sendEventToModel({
+        type: "conversation.item.create",
+        item: {
+          type: "message",
+          role: "system",
+          content: [{
+            type: "text",
+            text: `You are conducting a 5-minute Chinese language evaluation. 
+                  Begin by introducing yourself in English and explaining how 
+                  the evaluation will work. After that, conduct the entire 
+                  evaluation in Chinese.
+                  
+                  Remember to:
+                  1. Call track_language_evaluation after every response
+                  2. Progress through phases based on user ability
+                  3. Keep track of time
+                  4. Make detailed observations about pronunciation, grammar, vocabulary, and fluency`
+          }]
+        }
+      });
+
+      // Trigger the model to start responding
+      sendEventToModel({
+        type: "response.create"
+      });
+    }, 500);
   }, [isSessionActive, toolRegistered, sendEventToModel]);
+
+  useEffect(() => {
+    if (!isSessionActive) {
+      setToolRegistered(false);
+    }
+  }, [isSessionActive]);
 
   useEffect(() => {
     if (!isSessionActive) {
