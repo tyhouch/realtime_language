@@ -8,6 +8,10 @@ export default function App() {
   const [events, setEvents] = useState([]);
   const [dataChannel, setDataChannel] = useState(null);
   const [evaluationResults, setEvaluationResults] = useState([]);
+  const [sessionConfig, setSessionConfig] = useState({
+    language: 'Chinese',
+    durationMinutes: 5
+  });
   const peerConnection = useRef(null);
   const audioRef = useRef(null);
 
@@ -156,8 +160,39 @@ export default function App() {
     <div className="w-full h-full">
       <div className="flex w-full h-full">
         <div className="flex flex-col flex-1 border-r border-gray-200">
-          <div className="flex-0 h-16 border-b border-gray-200 p-4 flex items-center">
+          <div className="flex-0 h-16 border-b border-gray-200 p-4 flex items-center justify-between">
             <h1 className="text-xl">Language Evaluation</h1>
+            {!isSessionActive && (
+              <div className="flex gap-4">
+                <select
+                  value={sessionConfig.language}
+                  onChange={(e) => setSessionConfig(prev => ({
+                    ...prev,
+                    language: e.target.value
+                  }))}
+                  className="rounded border border-gray-300 px-2 py-1"
+                >
+                  <option value="Chinese">Chinese</option>
+                  <option value="Spanish">Spanish</option>
+                  <option value="French">French</option>
+                  <option value="Japanese">Japanese</option>
+                  {/* Add more languages as needed */}
+                </select>
+                <select
+                  value={sessionConfig.durationMinutes}
+                  onChange={(e) => setSessionConfig(prev => ({
+                    ...prev,
+                    durationMinutes: parseInt(e.target.value)
+                  }))}
+                  className="rounded border border-gray-300 px-2 py-1"
+                >
+                  <option value="3">3 minutes</option>
+                  <option value="5">5 minutes</option>
+                  <option value="10">10 minutes</option>
+                  <option value="15">15 minutes</option>
+                </select>
+              </div>
+            )}
           </div>
           <div className="flex-1 overflow-auto">
             <EventLog events={events} />
@@ -177,6 +212,7 @@ export default function App() {
             sendEventToModel={sendEventToModel}
             events={events}
             evaluationResults={evaluationResults}
+            sessionConfig={sessionConfig}
           />
         </div>
       </div>

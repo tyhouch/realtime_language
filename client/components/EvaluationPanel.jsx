@@ -6,117 +6,119 @@ import { useEffect, useState } from "react";
  * after each response. We can store or handle that data as needed.
  */
 
-const evaluationTool = {
-  type: "session.update",
-  session: {
-    tools: [
-      {
-        type: "function",
-        name: "track_language_evaluation",
-        description:
-          "Must be called after every model response to track progress.",
-        parameters: {
-          type: "object",
-          additionalProperties: false,
-          properties: {
-            phase_tracking: {
-              type: "object",
-              properties: {
-                current_phase: {
-                  type: "string",
-                  enum: ["warmup", "basic", "intermediate", "advanced", "closing"]
-                },
-                time_elapsed: { type: "number" },
-                topics_covered: {
-                  type: "array",
-                  items: { type: "string" }
-                }
-              },
-              required: ["current_phase", "time_elapsed", "topics_covered"]
-            },
-            observations: {
-              type: "object",
-              properties: {
-                pronunciation: {
-                  type: "object",
-                  properties: {
-                    score: { type: "integer", minimum: 1, maximum: 5 },
-                    notes: { type: "string" },
-                    examples: {
-                      type: "array",
-                      items: { type: "string" }
-                    }
-                  },
-                  required: ["score", "notes", "examples"]
-                },
-                grammar: {
-                  type: "object",
-                  properties: {
-                    score: { type: "integer", minimum: 1, maximum: 5 },
-                    notes: { type: "string" },
-                    examples: {
-                      type: "array",
-                      items: { type: "string" }
-                    }
-                  },
-                  required: ["score", "notes", "examples"]
-                },
-                vocabulary: {
-                  type: "object",
-                  properties: {
-                    score: { type: "integer", minimum: 1, maximum: 5 },
-                    notes: { type: "string" },
-                    examples: {
-                      type: "array",
-                      items: { type: "string" }
-                    }
-                  },
-                  required: ["score", "notes", "examples"]
-                },
-                fluency: {
-                  type: "object",
-                  properties: {
-                    score: { type: "integer", minimum: 1, maximum: 5 },
-                    notes: { type: "string" },
-                    examples: {
-                      type: "array",
-                      items: { type: "string" }
-                    }
-                  },
-                  required: ["score", "notes", "examples"]
-                }
-              },
-              required: ["pronunciation", "grammar", "vocabulary", "fluency"]
-            }
-          },
-          required: ["phase_tracking", "observations"]
-        }
-      }
-    ],
-    tool_choice: "auto",
-    instructions: "You are a professional language evaluator. After each response, call track_language_evaluation with relevant observations. Only speak in the target language except for initial instructions."
-  }
-};
-
 export default function EvaluationPanel({ 
   isSessionActive, 
   sendEventToModel, 
   events,
-  evaluationResults 
+  evaluationResults,
+  sessionConfig
 }) {
   const [toolRegistered, setToolRegistered] = useState(false);
+
+  const evaluationTool = {
+    type: "session.update",
+    session: {
+      tools: [
+        {
+          type: "function",
+          name: "track_language_evaluation",
+          description:
+            "Must be called after every model response to track progress.",
+          parameters: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              phase_tracking: {
+                type: "object",
+                properties: {
+                  current_phase: {
+                    type: "string",
+                    enum: ["warmup", "basic", "intermediate", "advanced", "closing"]
+                  },
+                  time_elapsed: { type: "number" },
+                  topics_covered: {
+                    type: "array",
+                    items: { type: "string" }
+                  }
+                },
+                required: ["current_phase", "time_elapsed", "topics_covered"]
+              },
+              observations: {
+                type: "object",
+                properties: {
+                  pronunciation: {
+                    type: "object",
+                    properties: {
+                      score: { type: "integer", minimum: 1, maximum: 5 },
+                      notes: { type: "string" },
+                      examples: {
+                        type: "array",
+                        items: { type: "string" }
+                      }
+                    },
+                    required: ["score", "notes", "examples"]
+                  },
+                  grammar: {
+                    type: "object",
+                    properties: {
+                      score: { type: "integer", minimum: 1, maximum: 5 },
+                      notes: { type: "string" },
+                      examples: {
+                        type: "array",
+                        items: { type: "string" }
+                      }
+                    },
+                    required: ["score", "notes", "examples"]
+                  },
+                  vocabulary: {
+                    type: "object",
+                    properties: {
+                      score: { type: "integer", minimum: 1, maximum: 5 },
+                      notes: { type: "string" },
+                      examples: {
+                        type: "array",
+                        items: { type: "string" }
+                      }
+                    },
+                    required: ["score", "notes", "examples"]
+                  },
+                  fluency: {
+                    type: "object",
+                    properties: {
+                      score: { type: "integer", minimum: 1, maximum: 5 },
+                      notes: { type: "string" },
+                      examples: {
+                        type: "array",
+                        items: { type: "string" }
+                      }
+                    },
+                    required: ["score", "notes", "examples"]
+                  }
+                },
+                required: ["pronunciation", "grammar", "vocabulary", "fluency"]
+              }
+            },
+            required: ["phase_tracking", "observations"]
+          }
+        }
+      ],
+      tool_choice: "auto",
+      instructions: `You are a professional language evaluator conducting an assessment. 
+      Be concise and direct in your responses. Your goal is to evaluate, not teach. 
+      Let the candidate do most of the talking. Use follow-up questions to assess their full capabilities.
+      After each response, call track_language_evaluation with your observations.
+      Only speak in ${sessionConfig.language} after initial instructions.`
+    }
+  };
 
   useEffect(() => {
     if (!isSessionActive || toolRegistered) return;
 
-    // Add logging to verify tool registration
     console.log('Registering evaluation tool...');
     
-    // Send the session.update to register the evaluation tool
     sendEventToModel(evaluationTool);
     setToolRegistered(true);
 
-    // Add conversation starter with a small delay
     setTimeout(() => {
       console.log('Sending initial conversation prompt...');
       sendEventToModel({
@@ -126,26 +128,26 @@ export default function EvaluationPanel({
           role: "system",
           content: [{
             type: "text",
-            text: `You are conducting a 5-minute Chinese language evaluation. 
-                  Begin by introducing yourself in English and explaining how 
-                  the evaluation will work. After that, conduct the entire 
-                  evaluation in Chinese.
+            text: `You are conducting a ${sessionConfig.durationMinutes}-minute ${sessionConfig.language} proficiency evaluation.
                   
-                  Remember to:
-                  1. Call track_language_evaluation after every response
-                  2. Progress through phases based on user ability
-                  3. Keep track of time
-                  4. Make detailed observations about pronunciation, grammar, vocabulary, and fluency`
+                  Key guidelines:
+                  - Introduce yourself briefly in English
+                  - Switch to ${sessionConfig.language} immediately after
+                  - Ask open-ended questions to assess proficiency
+                  - Let the candidate speak more than you
+                  - If answers are too short, probe deeper with follow-ups
+                  - Stay neutral - don't teach or correct mistakes
+                  - Track time and progress through evaluation phases
+                  - Call track_language_evaluation after each exchange`
           }]
         }
       });
 
-      // Trigger the model to start responding
       sendEventToModel({
         type: "response.create"
       });
     }, 500);
-  }, [isSessionActive, toolRegistered, sendEventToModel]);
+  }, [isSessionActive, toolRegistered, sendEventToModel, sessionConfig]);
 
   useEffect(() => {
     if (!isSessionActive) {
