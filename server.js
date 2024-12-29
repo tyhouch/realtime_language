@@ -45,13 +45,10 @@ server.get("/token", async () => {
 
 /**
  * 4) Route: finalEvaluation
- *    Uses the conversation text to produce a language evaluation
- *    with structured output from GPT-4o style models.
  */
 server.post("/finalEvaluation", async (req, reply) => {
   try {
     const { conversation } = req.body;
-
     if (!conversation) {
       return reply
         .status(400)
@@ -70,10 +67,10 @@ server.post("/finalEvaluation", async (req, reply) => {
       weaknesses: z.array(z.string()),
     });
 
-    // We provide a more explicit system message to reflect a job interview scenario
     const systemPrompt = `
       You are a formal language evaluation assistant for a mock job interview scenario. 
-      The user and assistant engaged in a conversation in order to assess the user's spoken language proficiency.
+      The user and assistant engaged in a conversation, guided by prior instructions, 
+      to assess the user's spoken language proficiency.
       Now, based on the entire conversation transcript, produce a short structured evaluation with:
       - overall_summary (concise text describing performance)
       - rating (integer 1-10)
@@ -85,10 +82,7 @@ server.post("/finalEvaluation", async (req, reply) => {
     const completion = await openai.beta.chat.completions.parse({
       model: "gpt-4o-mini",
       messages: [
-        {
-          role: "system",
-          content: systemPrompt,
-        },
+        { role: "system", content: systemPrompt },
         {
           role: "user",
           content: conversation

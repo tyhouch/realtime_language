@@ -53,8 +53,31 @@ export default function App() {
       setIsSessionActive(true);
       setEvents([]);
 
-      // Send a system prompt instructing the assistant
-      sendSystemPrompt(languageChoice);
+      // 1) Update session with language-specific instructions
+      sendEventToModel({
+        type: "session.update",
+        session: {
+          instructions: `You are conducting a formal language proficiency evaluation in ${languageChoice}.
+            Start by greeting the user in English and explaining you're their language evaluator.
+            Then switch to ${languageChoice} for the rest of the evaluation.
+            
+            Assessment areas:
+            - Pronunciation and accent
+            - Grammar accuracy
+            - Vocabulary range
+            - Conversational fluency
+            
+            Keep your responses concise to maximize student speaking time.`,
+        },
+      });
+
+      // 2) Trigger the model to start talking with response.create
+      sendEventToModel({
+        type: "response.create",
+        response: {
+          function_call: "auto",
+        },
+      });
     });
 
     dc.addEventListener("message", (e) => {
@@ -82,45 +105,6 @@ export default function App() {
     await pc.setRemoteDescription({ type: "answer", sdp: answerSDP });
 
     peerConnection.current = pc;
-  }
-
-  /**
-   * This is our system prompt that the model sees right when the session starts.
-   * We instruct it to greet in English, outline the structure, then switch to
-   * the chosen language, guiding the user step by step.
-   */
-  function sendSystemPrompt(lang) {
-    const systemText = `
-      You are a language evaluation assistant. 
-      Greet the user briefly in English. 
-      Explain you will be conducting a ${lang} language evaluation for a job interview scenario.
-      Outline the structure:
-        1) Quick intro in English (just a few words),
-        2) Switch to ${lang} and ask the user to introduce themselves,
-        3) Ask follow-up questions about their background or interests,
-        4) Possibly discuss a short scenario or role-play in ${lang},
-        5) Then proceed to a wrap-up.
-      Keep your own responses concise, encourage the user to speak as much as possible in ${lang}. 
-      Let's begin with your short greeting in English, then switch to ${lang}.
-    `;
-
-    // 1) System message
-    sendEventToModel({
-      type: "conversation.item.create",
-      item: {
-        type: "message",
-        role: "system",
-        content: [{ type: "text", text: systemText }],
-      },
-    });
-
-    // 2) We ask the model to respond
-    sendEventToModel({
-      type: "response.create",
-      response: {
-        function_call: "auto",
-      },
-    });
   }
 
   /**
@@ -222,8 +206,7 @@ export default function App() {
   }
 
   /**
-   * No function calls from the assistant needed right now,
-   * so we skip handleToolCall
+   * Monitor inbound messages from the model
    */
   useEffect(() => {
     if (!dataChannel) return;
