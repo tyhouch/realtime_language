@@ -7,23 +7,26 @@ import EventLog from "./EventLog";
  * Main app entry point. Manages:
  * - WebRTC handshake
  * - DataChannel for message exchange
- * - Storing all conversation events
- * - Handling function calls (final evaluation)
+ * - Storing conversation events
+ * - Handling final structured evaluation
  */
 export default function App() {
   const [isSessionActive, setIsSessionActive] = useState(false);
   const [events, setEvents] = useState([]);
   const [dataChannel, setDataChannel] = useState(null);
-  const [evaluationResults, setEvaluationResults] = useState([]);
+  const [evaluationResults, setEvaluationResults] = useState(null);
   const [languageChoice, setLanguageChoice] = useState("Chinese");
 
   const peerConnection = useRef(null);
   const audioRef = useRef(null);
 
   /**
-   * Start a Realtime session, fetch ephemeral token, set up WebRTC + dataChannel
+   * Start a Realtime session (WebRTC, ephemeral token, DataChannel)
    */
   async function startSession() {
+    // Clear any prior final evaluation
+    setEvaluationResults(null);
+
     const res = await fetch("/token");
     const tokenJSON = await res.json();
 
@@ -79,8 +82,10 @@ export default function App() {
 
   /**
    * End the session
+   * Then call finalEvaluation with full conversation
    */
-  function stopSession() {
+  async function stopSession() {
+    // 1) Close data channel + peer
     if (dataChannel) dataChannel.close();
     if (peerConnection.current) {
       peerConnection.current.close();
@@ -88,10 +93,64 @@ export default function App() {
     setIsSessionActive(false);
     setDataChannel(null);
     peerConnection.current = null;
+
+    // 2) Build entire text conversation from events
+    // We'll gather user & assistant messages from events
+    const textConversation = buildTextConversation(events);
+
+    // 3) Call finalEvaluation route
+    const finalResp = await fetch("/finalEvaluation", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ conversation: textConversation }),
+    });
+    const data = await finalResp.json();
+
+    if (data.success) {
+      setEvaluationResults(data.evaluation);
+    } else {
+      setEvaluationResults({
+        overall_summary: "Sorry, we could not parse a final evaluation.",
+        rating: 0,
+        strengths: [],
+        weaknesses: [],
+      });
+    }
   }
 
   /**
-   * Sends any event object to the model via dataChannel
+   * Helper: gather user & assistant text from events
+   */
+  function buildTextConversation(allEvents) {
+    // Each event might have a 'type' = "conversation.item.create"
+    // with item.role = "user" or "assistant"
+    // and item.content = [ { text: string }, ... ]
+    // We'll ignore function calls or other stuff.
+    const textOnly = [];
+    for (let i = allEvents.length - 1; i >= 0; i--) {
+      const ev = allEvents[i];
+      if (
+        ev.type === "conversation.item.create" &&
+        ev.item?.type === "message" &&
+        ev.item?.content?.length
+      ) {
+        const role = ev.item.role || "assistant";
+        const textContent = ev.item.content
+          .map((c) => c.text || "")
+          .join(" ");
+        if (textContent.trim()) {
+          textOnly.push({ role, text: textContent.trim() });
+        }
+      }
+    }
+    // Reverse it so earliest messages come first
+    return textOnly.reverse();
+  }
+
+  /**
+   * Send any event object to the model over dataChannel
    */
   function sendEventToModel(evt) {
     if (!dataChannel) return;
@@ -107,7 +166,6 @@ export default function App() {
   function sendUserMessage(text) {
     if (!isSessionActive) return;
 
-    // 1) Add user message
     sendEventToModel({
       type: "conversation.item.create",
       item: {
@@ -117,7 +175,6 @@ export default function App() {
       },
     });
 
-    // 2) Prompt model to respond
     sendEventToModel({
       type: "response.create",
       response: {
@@ -127,51 +184,8 @@ export default function App() {
   }
 
   /**
-   * Whenever the model calls our final evaluation function,
-   * parse the JSON and store it in evaluationResults
-   */
-  async function handleToolCall(event) {
-    // The model might call "final_language_evaluation" once.
-    const possibleCalls = (event.response?.output || event.tool_calls || []).filter(
-      (o) =>
-        (o.type === "function_call" || o.function) &&
-        (o.name === "final_language_evaluation" ||
-          o.function?.name === "final_language_evaluation")
-    );
-
-    for (const call of possibleCalls) {
-      try {
-        const args = JSON.parse(call.arguments || call.function?.arguments || "{}");
-        // Save results
-        setEvaluationResults((prev) => [
-          ...prev,
-          {
-            id: call.call_id || crypto.randomUUID(),
-            timestamp: Date.now(),
-            ...args,
-          },
-        ]);
-
-        // Acknowledge function call
-        sendEventToModel({
-          type: "conversation.item.create",
-          item: {
-            type: "function_call_output",
-            call_id: call.call_id || call.id,
-            output: JSON.stringify({
-              success: true,
-              timestamp: Date.now(),
-            }),
-          },
-        });
-      } catch (err) {
-        console.error("Error parsing function call:", err);
-      }
-    }
-  }
-
-  /**
-   * Listen for messages that might contain a function call
+   * No function calls from the assistant needed right now,
+   * so we skip handleToolCall
    */
   useEffect(() => {
     if (!dataChannel) return;
@@ -179,14 +193,7 @@ export default function App() {
     const handleMessage = (e) => {
       const event = JSON.parse(e.data);
       setEvents((prev) => [event, ...prev]);
-
-      if (
-        event.type === "response.done" ||
-        event.type === "response.output_item.done" ||
-        event.type === "function_call"
-      ) {
-        handleToolCall(event);
-      }
+      // if we needed function calls, we'd parse them here
     };
 
     dataChannel.addEventListener("message", handleMessage);
@@ -232,8 +239,6 @@ export default function App() {
         <div className="w-96">
           <EvaluationPanel
             isSessionActive={isSessionActive}
-            sendEventToModel={sendEventToModel}
-            events={events}
             evaluationResults={evaluationResults}
             languageChoice={languageChoice}
           />
