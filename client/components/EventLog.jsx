@@ -3,6 +3,8 @@ import { useState } from "react";
 function SingleEvent({ event }) {
   const [expanded, setExpanded] = useState(false);
 
+  // A simple heuristic: if there's an "event_id" that doesn't start with "event_", we label it as "client ->"
+  // otherwise "assistant ->". Adjust as needed.
   const isClient = event.event_id && !event.event_id.startsWith("event_");
 
   return (
@@ -31,7 +33,10 @@ export default function EventLog({ events }) {
       {events.length === 0 ? (
         <div className="text-gray-500">No events yet...</div>
       ) : (
-        events.map((ev) => <SingleEvent key={ev.event_id} event={ev} />)
+        // Use (ev, i) as fallback key, so we don’t get duplicates if event_id repeats
+        events.map((ev, i) => (
+          <SingleEvent key={`${ev.event_id}_${i}`} event={ev} />
+        ))
       )}
     </div>
   );

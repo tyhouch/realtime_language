@@ -3,69 +3,87 @@ import SessionControls from "./SessionControls";
 import EvaluationPanel from "./EvaluationPanel";
 import EventLog from "./EventLog";
 
+/**
+ * Main app entry point. Manages:
+ * - WebRTC handshake
+ * - DataChannel for message exchange
+ * - Storing all conversation events
+ * - Handling tool calls
+ */
 export default function App() {
   const [isSessionActive, setIsSessionActive] = useState(false);
   const [events, setEvents] = useState([]);
   const [dataChannel, setDataChannel] = useState(null);
   const [evaluationResults, setEvaluationResults] = useState([]);
+
   const [sessionConfig, setSessionConfig] = useState({
-    language: 'Chinese',
-    durationMinutes: 5
+    language: "Chinese",
+    durationMinutes: 5,
   });
+
   const peerConnection = useRef(null);
   const audioRef = useRef(null);
 
-  // Start session: fetch ephemeral token, create RTCPeerConnection, etc.
+  /**
+   * Start a Realtime session, fetch ephemeral token, set up WebRTC + dataChannel
+   */
   async function startSession() {
     const res = await fetch("/token");
     const tokenJSON = await res.json();
-    const ephemeralKey = tokenJSON.client_secret.value;
 
+    const ephemeralKey = tokenJSON.client_secret.value;
     const pc = new RTCPeerConnection();
+
+    // Setup audio
     audioRef.current = document.createElement("audio");
     audioRef.current.autoplay = true;
     pc.ontrack = (ev) => {
       audioRef.current.srcObject = ev.streams[0];
     };
 
-    // Capture microphone
+    // Capture user mic
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     pc.addTrack(stream.getTracks()[0]);
 
-    // Create data channel for JSON events
+    // Data channel for JSON events
     const dc = pc.createDataChannel("evaluation-events");
     setDataChannel(dc);
-
-    dc.addEventListener("message", (e) => {
-      // Received events from the model
-      const evt = JSON.parse(e.data);
-      setEvents((prev) => [evt, ...prev]);
-    });
 
     dc.addEventListener("open", () => {
       setIsSessionActive(true);
       setEvents([]);
     });
 
+    dc.addEventListener("message", (e) => {
+      const evt = JSON.parse(e.data);
+      setEvents((prev) => [evt, ...prev]);
+    });
+
+    // WebRTC handshake
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
 
-    // Use Realtime API endpoint
     const realtimeUrl = "https://api.openai.com/v1/realtime";
-    const postOffer = await fetch(`${realtimeUrl}?model=gpt-4o-mini-realtime-preview`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${ephemeralKey}`,
-        "Content-Type": "application/sdp"
-      },
-      body: offer.sdp,
-    });
+    const postOffer = await fetch(
+      `${realtimeUrl}?model=gpt-4o-mini-realtime-preview`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${ephemeralKey}`,
+          "Content-Type": "application/sdp",
+        },
+        body: offer.sdp,
+      }
+    );
     const answerSDP = await postOffer.text();
     await pc.setRemoteDescription({ type: "answer", sdp: answerSDP });
 
     peerConnection.current = pc;
   }
 
+  /**
+   * End the session
+   */
   function stopSession() {
     if (dataChannel) dataChannel.close();
     if (peerConnection.current) {
@@ -76,6 +94,9 @@ export default function App() {
     peerConnection.current = null;
   }
 
+  /**
+   * Sends any event object to the model via dataChannel
+   */
   function sendEventToModel(evt) {
     if (!dataChannel) return;
     evt.event_id = evt.event_id || crypto.randomUUID();
@@ -83,71 +104,91 @@ export default function App() {
     setEvents((prev) => [evt, ...prev]);
   }
 
+  /**
+   * When user types a message, we add that as a user turn
+   * then ask the model to respond with function_call=auto
+   */
   function sendUserMessage(text) {
-    const msgEvent = {
+    if (!isSessionActive) return;
+
+    // 1) Add user message
+    sendEventToModel({
       type: "conversation.item.create",
       item: {
         type: "message",
         role: "user",
-        content: [{ type: "input_text", text }]
-      }
-    };
-    sendEventToModel(msgEvent);
-    // Trigger model to respond
-    sendEventToModel({ type: "response.create" });
+        content: [{ type: "input_text", text }],
+      },
+    });
+
+    // 2) Prompt model to respond (with function calling)
+    sendEventToModel({
+      type: "response.create",
+      response: {
+        function_call: "auto",
+      },
+    });
   }
 
+  /**
+   * Whenever the model calls our tool, parse the JSON
+   * and store it in evaluationResults
+   */
   async function handleToolCall(event) {
-    // Add logging to debug the event structure
-    console.log('Checking for tool calls in event:', event);
-
-    // Check both response.output and direct tool_calls property
-    const toolCalls = (event.response?.output || event.tool_calls || []).filter(
-      output => (output.type === "function_call" || output.function) && 
-      (output.name === "track_language_evaluation" || output.function?.name === "track_language_evaluation")
+    const possibleCalls = (event.response?.output || event.tool_calls || []).filter(
+      (o) =>
+        (o.type === "function_call" || o.function) &&
+        (o.name === "track_language_evaluation" ||
+          o.function?.name === "track_language_evaluation")
     );
-    
-    console.log('Found tool calls:', toolCalls);
-    
-    for (const call of toolCalls) {
-      try {
-        const args = JSON.parse(call.arguments || call.function?.arguments || '{}');
-        
-        setEvaluationResults(prev => [...prev, {
-          id: call.call_id || crypto.randomUUID(),
-          timestamp: Date.now(),
-          ...args
-        }]);
 
-        // Send acknowledgment back to the model
+    for (const call of possibleCalls) {
+      try {
+        const args = JSON.parse(call.arguments || call.function?.arguments || "{}");
+        // Save results
+        setEvaluationResults((prev) => [
+          ...prev,
+          {
+            id: call.call_id || crypto.randomUUID(),
+            timestamp: Date.now(),
+            ...args,
+          },
+        ]);
+
+        // Acknowledge function call
         sendEventToModel({
           type: "conversation.item.create",
           item: {
             type: "function_call_output",
             call_id: call.call_id || call.id,
             output: JSON.stringify({
-              received: true,
-              timestamp: Date.now()
-            })
-          }
+              success: true,
+              timestamp: Date.now(),
+            }),
+          },
         });
-      } catch (error) {
-        console.error('Error processing tool call:', error);
+      } catch (err) {
+        console.error("Error parsing function call:", err);
+        // If we parse fails, we skip storing
       }
     }
   }
 
+  /**
+   * Listen for messages that might contain a function call
+   */
   useEffect(() => {
     if (!dataChannel) return;
 
     const handleMessage = (e) => {
       const event = JSON.parse(e.data);
-      setEvents(prev => [event, ...prev]);
-      
-      // Check multiple event types that might contain tool calls
-      if (event.type === "response.done" || 
-          event.type === "response.output_item.done" ||
-          event.type === "function_call") {
+      setEvents((prev) => [event, ...prev]);
+
+      if (
+        event.type === "response.done" ||
+        event.type === "response.output_item.done" ||
+        event.type === "function_call"
+      ) {
         handleToolCall(event);
       }
     };
@@ -159,6 +200,7 @@ export default function App() {
   return (
     <div className="w-full h-full">
       <div className="flex w-full h-full">
+        {/* Left Column */}
         <div className="flex flex-col flex-1 border-r border-gray-200">
           <div className="flex-0 h-16 border-b border-gray-200 p-4 flex items-center justify-between">
             <h1 className="text-xl">Language Evaluation</h1>
@@ -166,24 +208,27 @@ export default function App() {
               <div className="flex gap-4">
                 <select
                   value={sessionConfig.language}
-                  onChange={(e) => setSessionConfig(prev => ({
-                    ...prev,
-                    language: e.target.value
-                  }))}
+                  onChange={(e) =>
+                    setSessionConfig((prev) => ({
+                      ...prev,
+                      language: e.target.value,
+                    }))
+                  }
                   className="rounded border border-gray-300 px-2 py-1"
                 >
                   <option value="Chinese">Chinese</option>
                   <option value="Spanish">Spanish</option>
                   <option value="French">French</option>
                   <option value="Japanese">Japanese</option>
-                  {/* Add more languages as needed */}
                 </select>
                 <select
                   value={sessionConfig.durationMinutes}
-                  onChange={(e) => setSessionConfig(prev => ({
-                    ...prev,
-                    durationMinutes: parseInt(e.target.value)
-                  }))}
+                  onChange={(e) =>
+                    setSessionConfig((prev) => ({
+                      ...prev,
+                      durationMinutes: parseInt(e.target.value, 10),
+                    }))
+                  }
                   className="rounded border border-gray-300 px-2 py-1"
                 >
                   <option value="3">3 minutes</option>
@@ -206,6 +251,8 @@ export default function App() {
             />
           </div>
         </div>
+
+        {/* Right Column: Evaluation Panel */}
         <div className="w-96">
           <EvaluationPanel
             isSessionActive={isSessionActive}

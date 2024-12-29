@@ -1,20 +1,21 @@
 import { useEffect, useState } from "react";
 
 /**
- * This panel configures and updates the model with language-evaluation tools.
- * We define a "track_language_evaluation" function for the model to call
- * after each response. We can store or handle that data as needed.
+ * This panel registers the "track_language_evaluation" tool,
+ * then sends an initial system message prompting the model
+ * to begin the evaluation, asking it to call that tool every turn.
  */
-
-export default function EvaluationPanel({ 
-  isSessionActive, 
-  sendEventToModel, 
+export default function EvaluationPanel({
+  isSessionActive,
+  sendEventToModel,
   events,
   evaluationResults,
-  sessionConfig
+  sessionConfig,
 }) {
   const [toolRegistered, setToolRegistered] = useState(false);
 
+  // The tool schema: it must supply "phase_tracking" + "observations"
+  // after every response, capturing scores, notes, etc.
   const evaluationTool = {
     type: "session.update",
     session: {
@@ -23,7 +24,7 @@ export default function EvaluationPanel({
           type: "function",
           name: "track_language_evaluation",
           description:
-            "Must be called after every model response to track progress.",
+            "A function you MUST call after every assistant message. Provide your current phase, time_elapsed, topics covered, and skill observations.",
           parameters: {
             type: "object",
             additionalProperties: false,
@@ -33,15 +34,28 @@ export default function EvaluationPanel({
                 properties: {
                   current_phase: {
                     type: "string",
-                    enum: ["warmup", "basic", "intermediate", "advanced", "closing"]
+                    enum: [
+                      "warmup",
+                      "basic",
+                      "intermediate",
+                      "advanced",
+                      "closing",
+                    ],
+                    description:
+                      "Which phase are we in? Must be one of warmup, basic, intermediate, advanced, or closing.",
                   },
-                  time_elapsed: { type: "number" },
+                  time_elapsed: {
+                    type: "number",
+                    description: "Approximate seconds elapsed in the eval.",
+                  },
                   topics_covered: {
                     type: "array",
-                    items: { type: "string" }
-                  }
+                    items: { type: "string" },
+                    description:
+                      "Array of topics or prompts covered in this exchange.",
+                  },
                 },
-                required: ["current_phase", "time_elapsed", "topics_covered"]
+                required: ["current_phase", "time_elapsed", "topics_covered"],
               },
               observations: {
                 type: "object",
@@ -53,10 +67,10 @@ export default function EvaluationPanel({
                       notes: { type: "string" },
                       examples: {
                         type: "array",
-                        items: { type: "string" }
-                      }
+                        items: { type: "string" },
+                      },
                     },
-                    required: ["score", "notes", "examples"]
+                    required: ["score", "notes", "examples"],
                   },
                   grammar: {
                     type: "object",
@@ -65,10 +79,10 @@ export default function EvaluationPanel({
                       notes: { type: "string" },
                       examples: {
                         type: "array",
-                        items: { type: "string" }
-                      }
+                        items: { type: "string" },
+                      },
                     },
-                    required: ["score", "notes", "examples"]
+                    required: ["score", "notes", "examples"],
                   },
                   vocabulary: {
                     type: "object",
@@ -77,10 +91,10 @@ export default function EvaluationPanel({
                       notes: { type: "string" },
                       examples: {
                         type: "array",
-                        items: { type: "string" }
-                      }
+                        items: { type: "string" },
+                      },
                     },
-                    required: ["score", "notes", "examples"]
+                    required: ["score", "notes", "examples"],
                   },
                   fluency: {
                     type: "object",
@@ -89,88 +103,89 @@ export default function EvaluationPanel({
                       notes: { type: "string" },
                       examples: {
                         type: "array",
-                        items: { type: "string" }
-                      }
+                        items: { type: "string" },
+                      },
                     },
-                    required: ["score", "notes", "examples"]
-                  }
+                    required: ["score", "notes", "examples"],
+                  },
                 },
-                required: ["pronunciation", "grammar", "vocabulary", "fluency"]
-              }
+                required: ["pronunciation", "grammar", "vocabulary", "fluency"],
+              },
             },
-            required: ["phase_tracking", "observations"]
-          }
-        }
+            required: ["phase_tracking", "observations"],
+          },
+        },
       ],
       tool_choice: "auto",
-      instructions: `You are a professional language evaluator conducting an assessment. 
-      Be concise and direct in your responses. Your goal is to evaluate, not teach. 
-      Let the candidate do most of the talking. Use follow-up questions to assess their full capabilities.
-      After each response, call track_language_evaluation with your observations.
-      Only speak in ${sessionConfig.language} after initial instructions.`
-    }
+      instructions: `
+        You are a ${sessionConfig.language} language evaluation assistant. 
+        Each time you respond, you MUST call track_language_evaluation 
+        with JSON describing the user's performance so far. 
+        Keep your responses concise and direct; let the user do most of the talking. 
+        Move from warmup->basic->intermediate->advanced->closing phases as time passes. 
+        Only speak in ${sessionConfig.language} (after your first introduction).
+      `,
+    },
   };
 
   useEffect(() => {
     if (!isSessionActive || toolRegistered) return;
 
-    console.log('Registering evaluation tool...');
-    
+    // Step 1: register the tool
     sendEventToModel(evaluationTool);
     setToolRegistered(true);
 
+    // Step 2: send initial system message
     setTimeout(() => {
-      console.log('Sending initial conversation prompt...');
       sendEventToModel({
         type: "conversation.item.create",
         item: {
           type: "message",
           role: "system",
-          content: [{
-            type: "text",
-            text: `You are conducting a ${sessionConfig.durationMinutes}-minute ${sessionConfig.language} proficiency evaluation.
-                  
-                  Key guidelines:
-                  - Introduce yourself briefly in English
-                  - Switch to ${sessionConfig.language} immediately after
-                  - Ask open-ended questions to assess proficiency
-                  - Let the candidate speak more than you
-                  - If answers are too short, probe deeper with follow-ups
-                  - Stay neutral - don't teach or correct mistakes
-                  - Track time and progress through evaluation phases
-                  - Call track_language_evaluation after each exchange`
-          }]
-        }
+          content: [
+            {
+              type: "text",
+              text: `
+                You are conducting a ${sessionConfig.durationMinutes}-minute ${sessionConfig.language} evaluation. 
+                Briefly introduce yourself in English, then switch to ${sessionConfig.language}. 
+                ALWAYS call track_language_evaluation after every message you produce.
+                Keep answers short, prompting the user to speak.
+              `,
+            },
+          ],
+        },
       });
 
+      // Step 3: ask model for first response
       sendEventToModel({
-        type: "response.create"
+        type: "response.create",
+        response: {
+          function_call: "auto",
+        },
       });
     }, 500);
   }, [isSessionActive, toolRegistered, sendEventToModel, sessionConfig]);
 
+  // If session stops, reset so we can do it again
   useEffect(() => {
     if (!isSessionActive) {
       setToolRegistered(false);
     }
   }, [isSessionActive]);
 
-  useEffect(() => {
-    if (!isSessionActive) {
-      setToolRegistered(false);
-    }
-  }, [isSessionActive]);
-
+  /**
+   * Render function for skill scores
+   */
   function renderSkillScore(skill, score) {
     return (
       <div className="flex items-center gap-2 mb-2">
         <div className="w-24 font-medium">{skill}:</div>
         <div className="flex gap-1">
-          {[1, 2, 3, 4, 5].map(n => (
-            <div 
+          {[1, 2, 3, 4, 5].map((n) => (
+            <div
               key={n}
               className={`w-4 h-4 rounded-full ${
-                n <= score ? 'bg-green-500' : 'bg-gray-200'
+                n <= score ? "bg-green-500" : "bg-gray-300"
               }`}
             />
           ))}
@@ -179,73 +194,75 @@ export default function EvaluationPanel({
     );
   }
 
+  // Show the last evaluation result on top
   const latestEvaluation = evaluationResults[evaluationResults.length - 1];
 
   return (
     <div className="h-full p-4 bg-gray-100 overflow-y-auto">
       <h2 className="text-lg font-bold mb-4">Evaluation Progress</h2>
-      
       {isSessionActive ? (
         <>
-          <div className="mb-4">
-            <p className="text-sm">
-              Tool status: {toolRegistered ? "Registered" : "Not registered"}
-            </p>
-            <p className="text-sm">
-              Evaluations recorded: {evaluationResults.length}
-            </p>
+          <div className="mb-2 text-sm">
+            Tool registered: {toolRegistered ? "Yes" : "No"}
+          </div>
+          <div className="mb-4 text-sm">
+            Evaluations recorded: {evaluationResults.length}
           </div>
 
           {latestEvaluation && (
-            <div className="bg-white rounded-lg p-4 mb-4">
-              <h3 className="font-bold mb-2">Latest Evaluation</h3>
-              <div className="mb-4">
-                <div className="text-sm font-medium mb-1">Phase:</div>
-                <div className="bg-blue-100 text-blue-800 px-2 py-1 rounded inline-block">
+            <div className="bg-white rounded p-4 mb-4">
+              <h3 className="text-sm font-bold mb-2">Latest Evaluation</h3>
+              <div className="mb-2">
+                <span className="font-medium text-sm">Phase:</span>{" "}
+                <span className="bg-blue-100 text-blue-800 px-2 py-1 rounded text-sm">
                   {latestEvaluation.phase_tracking.current_phase}
-                </div>
+                </span>
               </div>
 
-              <div className="mb-4">
-                <div className="text-sm font-medium mb-2">Skills Assessment:</div>
-                {renderSkillScore('Pronunciation', latestEvaluation.observations.pronunciation.score)}
-                {renderSkillScore('Grammar', latestEvaluation.observations.grammar.score)}
-                {renderSkillScore('Vocabulary', latestEvaluation.observations.vocabulary.score)}
-                {renderSkillScore('Fluency', latestEvaluation.observations.fluency.score)}
+              <div className="mb-2">
+                <div className="text-sm font-medium">Skills Assessment:</div>
+                {renderSkillScore(
+                  "Pronunciation",
+                  latestEvaluation.observations.pronunciation.score
+                )}
+                {renderSkillScore(
+                  "Grammar",
+                  latestEvaluation.observations.grammar.score
+                )}
+                {renderSkillScore(
+                  "Vocabulary",
+                  latestEvaluation.observations.vocabulary.score
+                )}
+                {renderSkillScore(
+                  "Fluency",
+                  latestEvaluation.observations.fluency.score
+                )}
               </div>
 
-              <div className="mb-4">
-                <div className="text-sm font-medium mb-1">Topics Covered:</div>
+              <div className="mb-2">
+                <div className="text-sm font-medium">Topics Covered:</div>
                 <div className="flex flex-wrap gap-1">
-                  {latestEvaluation.phase_tracking.topics_covered.map((topic, i) => (
-                    <span 
-                      key={i} 
-                      className="bg-gray-100 px-2 py-1 rounded text-sm"
-                    >
-                      {topic}
-                    </span>
-                  ))}
+                  {latestEvaluation.phase_tracking.topics_covered.map(
+                    (topic, i) => (
+                      <span
+                        key={i}
+                        className="bg-gray-100 px-2 py-1 rounded text-xs"
+                      >
+                        {topic}
+                      </span>
+                    )
+                  )}
                 </div>
               </div>
 
-              <div>
-                <div className="text-sm font-medium mb-1">Notes:</div>
-                <div className="text-sm text-gray-600">
-                  <div>Pronunciation: {latestEvaluation.observations.pronunciation.notes}</div>
-                  <div>Grammar: {latestEvaluation.observations.grammar.notes}</div>
-                  <div>Vocabulary: {latestEvaluation.observations.vocabulary.notes}</div>
-                  <div>Fluency: {latestEvaluation.observations.fluency.notes}</div>
-                </div>
+              <div className="text-xs text-gray-500">
+                Time elapsed: {latestEvaluation.phase_tracking.time_elapsed}s
               </div>
             </div>
           )}
-
-          <div className="text-xs text-gray-500">
-            Time elapsed: {latestEvaluation?.phase_tracking.time_elapsed || 0}s
-          </div>
         </>
       ) : (
-        <p className="text-gray-500">Session is not active...</p>
+        <p className="text-gray-500">Session is not active.</p>
       )}
     </div>
   );
