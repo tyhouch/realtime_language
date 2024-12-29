@@ -39,10 +39,12 @@ server.get("/token", async (request) => {
       instructions: `You are a strict professional language evaluator conducting an oral proficiency interview in ${targetLanguage}.
         
         IMPORTANT: When the session begins, introduce yourself in English following this format:
-        "Hello! I'm your language proficiency evaluator. We'll be conducting a rigorous assessment of your ${targetLanguage} skills through conversation. This evaluation will test various aspects of your language ability. Are you ready to begin?"
+        "Hello! I'm your language proficiency evaluator. We'll be conducting a rigorous assessment of your ${targetLanguage} skills through conversation. Are you ready to begin?"
 
         After user confirmation, switch completely to ${targetLanguage}.
         
+        Your responses should be short and concise. This is a test of the user's language ability, not your ability to speak ${targetLanguage}.
+
         Evaluation structure:
         1. Basic competency check (greetings, simple personal info)
         2. Daily scenarios (work, study, routines)
@@ -55,12 +57,15 @@ server.get("/token", async (request) => {
         - Challenge the user with increasing complexity
         - Note when user avoids difficult topics
         - Track mistakes and simplifications
+        - Keep your responses concise and to the point. 
+
+        YOU CAN:
+        - Use English if the user struggles
+        
         
         DO NOT:
-        - Accept one-word answers
-        - Simplify unless absolutely necessary
-        - Allow extended silences
-        - Skip evaluation stages`,
+        - Skip evaluation stages
+        - Give long responses`,
     }),
   });
 
@@ -76,10 +81,19 @@ server.get("/token", async (request) => {
 server.post("/finalEvaluation", async (req, reply) => {
   try {
     const { conversation, duration } = req.body;
-    if (!conversation) {
+    
+    // Add detailed debugging
+    console.log("Received request body:", JSON.stringify(req.body, null, 2));
+    console.log("Conversation array length:", conversation?.length || 0);
+    if (conversation?.length > 0) {
+      console.log("First conversation item:", conversation[0]);
+      console.log("Last conversation item:", conversation[conversation.length - 1]);
+    }
+    
+    if (!conversation || !conversation.length) {
       return reply
         .status(400)
-        .send({ error: "Missing conversation in request body" });
+        .send({ error: "Missing or empty conversation in request body" });
     }
 
     const openai = new OpenAI({
@@ -163,11 +177,34 @@ server.post("/finalEvaluation", async (req, reply) => {
 
     const evaluation = completion.choices[0].message.parsed;
     
-    // Additional validation checks
-    if (evaluation.conversation_depth.substantive_discussion === false) {
-      evaluation.final_scores.overall_score = 0;
-      evaluation.final_scores.cefr_level = 'Below A1';
-    }
+    // Calculate overall score based on skills and other metrics
+    const calculateOverallScore = (evaluation) => {
+      // Skills contribute 60% of total score (12 points each max)
+      const skillsScore = Object.values(evaluation.skills).reduce((sum, skill) => {
+        return sum + (skill.score * 0.6);  // Convert from /20 to /12
+      }, 0);
+
+      // Conversation depth contributes 20% (20 points max)
+      const depthScore = (
+        (evaluation.conversation_depth.complexity_achieved * 2) + // 0-10 points
+        (evaluation.conversation_depth.substantive_discussion ? 5 : 0) + // 5 points
+        (evaluation.conversation_depth.longest_response_quality * 1) // 0-5 points
+      );
+
+      // Quantitative measures contribute 20% (20 points max)
+      const quantScore = (
+        (evaluation.quantitative_measures.response_rate / 100 * 5) + // 0-5 points
+        (evaluation.quantitative_measures.grammar_accuracy / 100 * 5) + // 0-5 points
+        (evaluation.quantitative_measures.vocabulary_range / 100 * 5) + // 0-5 points
+        (Math.min(evaluation.quantitative_measures.average_response_length / 50, 1) * 5) // 0-5 points
+      );
+
+      // Calculate total (max 100)
+      return Math.round(skillsScore + depthScore + quantScore);
+    };
+
+    // Calculate and update the overall score
+    evaluation.final_scores.overall_score = calculateOverallScore(evaluation);
 
     // Ensure scores align with CEFR levels
     const cefr_minimums = {

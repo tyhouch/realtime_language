@@ -105,6 +105,16 @@ export default function App() {
    * Then call finalEvaluation with full conversation
    */
   async function stopSession() {
+    console.log("Stopping session...");
+    console.log("Total events:", events.length);
+    
+    // Log event types distribution
+    const eventTypes = events.reduce((acc, ev) => {
+      acc[ev.type] = (acc[ev.type] || 0) + 1;
+      return acc;
+    }, {});
+    console.log("Event types distribution:", eventTypes);
+  
     // 1) Close data channel + peer
     if (dataChannel) dataChannel.close();
     if (peerConnection.current) {
@@ -113,11 +123,21 @@ export default function App() {
     setIsSessionActive(false);
     setDataChannel(null);
     peerConnection.current = null;
-
+  
     // 2) Build entire text conversation from events
     const textConversation = buildTextConversation(events);
-
-    // 3) Call finalEvaluation route with proper error handling
+    
+    // Validate conversation before sending
+    if (!textConversation || !textConversation.length) {
+      console.error("No conversation built from events!");
+      return;
+    }
+  
+    console.log("Built conversation:", textConversation);
+    console.log("Conversation length:", textConversation.length);
+    console.log("Sample messages:", textConversation.slice(0, 2));
+  
+    // 3) Call finalEvaluation route
     try {
       const finalResp = await fetch("/finalEvaluation", {
         method: "POST",
@@ -129,46 +149,21 @@ export default function App() {
           duration: Date.now() - sessionStartTime
         }),
       });
+      
+      if (!finalResp.ok) {
+        const errorText = await finalResp.text();
+        console.error("Evaluation failed:", finalResp.status, errorText);
+        throw new Error(`Evaluation failed: ${errorText}`);
+      }
+      
       const data = await finalResp.json();
-
       if (data.success) {
         setEvaluationResults(data.evaluation);
       } else {
-        setEvaluationResults({
-          skills: {
-            pronunciation: { score: 0 },
-            grammar: { score: 0 },
-            vocabulary: { score: 0 },
-            fluency: { score: 0 },
-            listening_comprehension: { score: 0 }
-          },
-          conversation_depth: {
-            topics_discussed: [],
-            complexity_achieved: 0,
-            substantive_discussion: false,
-            longest_response_quality: 0
-          },
-          quantitative_measures: {
-            response_rate: 0,
-            average_response_length: 0,
-            grammar_accuracy: 0,
-            vocabulary_range: 0
-          },
-          final_scores: {
-            overall_score: 0,
-            cefr_level: 'Below A1',
-            recommended_level: 'Beginner'
-          },
-          critical_feedback: {
-            major_weaknesses: ['Unable to complete evaluation'],
-            required_improvements: [],
-            study_recommendations: []
-          }
-        });
+        throw new Error(data.error || 'Evaluation failed');
       }
     } catch (error) {
       console.error('Evaluation error:', error);
-      // Set error state with proper structure
       setEvaluationResults({
         skills: {
           pronunciation: { score: 0 },
@@ -195,7 +190,7 @@ export default function App() {
           recommended_level: 'Beginner'
         },
         critical_feedback: {
-          major_weaknesses: ['Unable to complete evaluation'],
+          major_weaknesses: ['Unable to complete evaluation: ' + error.message],
           required_improvements: [],
           study_recommendations: []
         }
@@ -206,26 +201,44 @@ export default function App() {
   /**
    * Helper: gather user & assistant text from events
    */
+  function debugEvent(ev) {
+    console.log("Event type:", ev.type);
+    if (ev.item) console.log("Item:", ev.item);
+    if (ev.delta) console.log("Delta:", ev.delta);
+  }
+
   function buildTextConversation(allEvents) {
+    console.log("Building conversation from", allEvents.length, "events");
+    
     const textOnly = [];
-    for (let i = allEvents.length - 1; i >= 0; i--) {
-      const ev = allEvents[i];
-      if (
-        ev.type === "conversation.item.create" &&
-        ev.item?.type === "message" &&
-        ev.item?.content?.length
-      ) {
-        const role = ev.item.role || "assistant";
-        const textContent = ev.item.content
-          .map((c) => c.text || "")
-          .join(" ");
-        if (textContent.trim()) {
-          textOnly.push({ role, text: textContent.trim() });
-        }
+    const messageBuffer = new Map(); // Store messages by their ID
+    
+    // Process events in chronological order (oldest first)
+    for (const ev of allEvents.reverse()) {
+      console.log("Processing event:", ev.type, ev);
+  
+      // Handle user audio transcriptions
+      if (ev.type === "conversation.item.input_audio_transcription.completed") {
+        textOnly.push({
+          role: "user",
+          text: ev.transcript.trim()
+        });
+        console.log("Added user transcript:", ev.transcript.trim());
+      }
+      
+      // Handle assistant audio transcriptions (final versions)
+      if (ev.type === "response.audio_transcript.done") {
+        textOnly.push({
+          role: "assistant",
+          text: ev.transcript.trim()
+        });
+        console.log("Added assistant transcript:", ev.transcript.trim());
       }
     }
-    // Reverse so earliest messages come first
-    return textOnly.reverse();
+  
+    // Sort messages by their natural order
+    console.log("Final built conversation:", textOnly);
+    return textOnly;
   }
 
   /**
@@ -245,13 +258,18 @@ export default function App() {
   function sendUserMessage(text) {
     if (!isSessionActive) return;
 
+    console.log("Sending user message:", text); // Add debugging
+
     // 1) Add the user's message to conversation
     sendEventToModel({
       type: "conversation.item.create",
       item: {
         type: "message",
         role: "user",
-        content: [{ type: "input_text", text }],
+        content: [{ 
+          type: "input_text", 
+          text: text.trim() 
+        }],
       },
     });
 
@@ -259,8 +277,7 @@ export default function App() {
     sendEventToModel({
       type: "response.create",
       response: {
-        modalities: ["text", "audio"],
-        function_call: "auto"
+        modalities: ["text", "audio"]
       }
     });
   }
@@ -273,6 +290,7 @@ export default function App() {
 
     const handleMessage = (e) => {
       const event = JSON.parse(e.data);
+      console.log("Received event:", event); // Add debugging
       setEvents((prev) => [event, ...prev]);
     };
 
@@ -313,7 +331,11 @@ export default function App() {
             )}
           </div>
           <div className="flex-1 overflow-auto">
-            <EventLog events={events} />
+            <EventLog 
+              events={events} 
+              startTime={sessionStartTime}
+              isSessionActive={isSessionActive}
+            />
           </div>
           <div className="h-24 p-4 border-t border-gray-200">
             <SessionControls

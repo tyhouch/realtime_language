@@ -1,6 +1,6 @@
 // EventLog.jsx
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 
 function SingleEvent({ event }) {
   const [expanded, setExpanded] = useState(false);
@@ -40,16 +40,61 @@ function SingleEvent({ event }) {
   );
 }
 
-export default function EventLog({ events }) {
+function ConversationTimer({ startTime, isSessionActive }) {
+  const [elapsed, setElapsed] = useState(0);
+
+  useEffect(() => {
+    if (!startTime || !isSessionActive) return;
+    
+    const interval = setInterval(() => {
+      setElapsed(Math.floor((Date.now() - startTime) / 1000));
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [startTime, isSessionActive]);
+
+  const minutes = Math.floor(elapsed / 60);
+  const seconds = elapsed % 60;
+
+  return (
+    <div className="text-center py-4">
+      <div className="text-2xl font-bold">
+        {String(minutes).padStart(2, '0')}:{String(seconds).padStart(2, '0')}
+      </div>
+      <p className="text-sm text-gray-600 mt-2">
+        We recommend conversations over 2 minutes to properly evaluate your language skills
+      </p>
+    </div>
+  );
+}
+
+export default function EventLog({ events, startTime, isSessionActive }) {
+  const [debugMode, setDebugMode] = useState(false);
+
   return (
     <div className="p-2">
-      {events.length === 0 ? (
-        <div className="text-gray-500">No events yet...</div>
+      <div className="flex justify-between items-center mb-4">
+        <label className="flex items-center">
+          <input
+            type="checkbox"
+            checked={debugMode}
+            onChange={(e) => setDebugMode(e.target.checked)}
+            className="mr-2"
+          />
+          Debug Mode
+        </label>
+      </div>
+
+      {!debugMode ? (
+        <ConversationTimer startTime={startTime} isSessionActive={isSessionActive} />
       ) : (
-        // Use (ev, i) as fallback key, so we don’t get duplicates if event_id repeats
-        events.map((ev, i) => (
-          <SingleEvent key={`${ev.event_id}_${i}`} event={ev} />
-        ))
+        events.length === 0 ? (
+          <div className="text-gray-500">No events yet...</div>
+        ) : (
+          events.map((ev, i) => (
+            <SingleEvent key={`${ev.event_id}_${i}`} event={ev} />
+          ))
+        )
       )}
     </div>
   );
