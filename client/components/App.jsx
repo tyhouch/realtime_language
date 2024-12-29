@@ -8,18 +8,14 @@ import EventLog from "./EventLog";
  * - WebRTC handshake
  * - DataChannel for message exchange
  * - Storing all conversation events
- * - Handling tool calls
+ * - Handling function calls (final evaluation)
  */
 export default function App() {
   const [isSessionActive, setIsSessionActive] = useState(false);
   const [events, setEvents] = useState([]);
   const [dataChannel, setDataChannel] = useState(null);
   const [evaluationResults, setEvaluationResults] = useState([]);
-
-  const [sessionConfig, setSessionConfig] = useState({
-    language: "Chinese",
-    durationMinutes: 5,
-  });
+  const [languageChoice, setLanguageChoice] = useState("Chinese");
 
   const peerConnection = useRef(null);
   const audioRef = useRef(null);
@@ -106,7 +102,7 @@ export default function App() {
 
   /**
    * When user types a message, we add that as a user turn
-   * then ask the model to respond with function_call=auto
+   * then ask the model to respond
    */
   function sendUserMessage(text) {
     if (!isSessionActive) return;
@@ -121,7 +117,7 @@ export default function App() {
       },
     });
 
-    // 2) Prompt model to respond (with function calling)
+    // 2) Prompt model to respond
     sendEventToModel({
       type: "response.create",
       response: {
@@ -131,15 +127,16 @@ export default function App() {
   }
 
   /**
-   * Whenever the model calls our tool, parse the JSON
-   * and store it in evaluationResults
+   * Whenever the model calls our final evaluation function,
+   * parse the JSON and store it in evaluationResults
    */
   async function handleToolCall(event) {
+    // The model might call "final_language_evaluation" once.
     const possibleCalls = (event.response?.output || event.tool_calls || []).filter(
       (o) =>
         (o.type === "function_call" || o.function) &&
-        (o.name === "track_language_evaluation" ||
-          o.function?.name === "track_language_evaluation")
+        (o.name === "final_language_evaluation" ||
+          o.function?.name === "final_language_evaluation")
     );
 
     for (const call of possibleCalls) {
@@ -169,7 +166,6 @@ export default function App() {
         });
       } catch (err) {
         console.error("Error parsing function call:", err);
-        // If we parse fails, we skip storing
       }
     }
   }
@@ -205,36 +201,16 @@ export default function App() {
           <div className="flex-0 h-16 border-b border-gray-200 p-4 flex items-center justify-between">
             <h1 className="text-xl">Language Evaluation</h1>
             {!isSessionActive && (
-              <div className="flex gap-4">
+              <div>
                 <select
-                  value={sessionConfig.language}
-                  onChange={(e) =>
-                    setSessionConfig((prev) => ({
-                      ...prev,
-                      language: e.target.value,
-                    }))
-                  }
+                  value={languageChoice}
+                  onChange={(e) => setLanguageChoice(e.target.value)}
                   className="rounded border border-gray-300 px-2 py-1"
                 >
                   <option value="Chinese">Chinese</option>
                   <option value="Spanish">Spanish</option>
                   <option value="French">French</option>
                   <option value="Japanese">Japanese</option>
-                </select>
-                <select
-                  value={sessionConfig.durationMinutes}
-                  onChange={(e) =>
-                    setSessionConfig((prev) => ({
-                      ...prev,
-                      durationMinutes: parseInt(e.target.value, 10),
-                    }))
-                  }
-                  className="rounded border border-gray-300 px-2 py-1"
-                >
-                  <option value="3">3 minutes</option>
-                  <option value="5">5 minutes</option>
-                  <option value="10">10 minutes</option>
-                  <option value="15">15 minutes</option>
                 </select>
               </div>
             )}
@@ -259,7 +235,7 @@ export default function App() {
             sendEventToModel={sendEventToModel}
             events={events}
             evaluationResults={evaluationResults}
-            sessionConfig={sessionConfig}
+            languageChoice={languageChoice}
           />
         </div>
       </div>
