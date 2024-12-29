@@ -1,3 +1,5 @@
+// App.jsx
+
 import { useState, useRef, useEffect } from "react";
 import SessionControls from "./SessionControls";
 import EvaluationPanel from "./EvaluationPanel";
@@ -16,6 +18,7 @@ export default function App() {
   const [dataChannel, setDataChannel] = useState(null);
   const [evaluationResults, setEvaluationResults] = useState(null);
   const [languageChoice, setLanguageChoice] = useState("Chinese");
+  const [sessionStartTime, setSessionStartTime] = useState(null);
 
   const peerConnection = useRef(null);
   const audioRef = useRef(null);
@@ -26,18 +29,26 @@ export default function App() {
   async function startSession() {
     // Clear any prior final evaluation
     setEvaluationResults(null);
+    setSessionStartTime(Date.now());
 
-    const res = await fetch("/token");
+    const res = await fetch(`/token?language=${encodeURIComponent(languageChoice)}`);
     const tokenJSON = await res.json();
 
     const ephemeralKey = tokenJSON.client_secret.value;
     const pc = new RTCPeerConnection();
 
     // Setup audio
-    audioRef.current = document.createElement("audio");
-    audioRef.current.autoplay = true;
+    const audioElement = document.createElement("audio");
+    audioElement.autoplay = true;
+    document.body.appendChild(audioElement);
+    audioRef.current = audioElement;
+    
     pc.ontrack = (ev) => {
-      audioRef.current.srcObject = ev.streams[0];
+      if (ev.streams && ev.streams[0]) {
+        audioRef.current.srcObject = ev.streams[0];
+        console.log("Audio track received:", ev.streams[0].getAudioTracks());
+        audioRef.current.play().catch(e => console.error("Audio play failed:", e));
+      }
     };
 
     // Capture user mic
@@ -53,30 +64,12 @@ export default function App() {
       setIsSessionActive(true);
       setEvents([]);
 
-      // 1) Update session with language-specific instructions
-      sendEventToModel({
-        type: "session.update",
-        session: {
-          instructions: `You are conducting a formal language proficiency evaluation in ${languageChoice}.
-            Start by greeting the user in English and explaining you're their language evaluator.
-            Then switch to ${languageChoice} for the rest of the evaluation.
-            
-            Assessment areas:
-            - Pronunciation and accent
-            - Grammar accuracy
-            - Vocabulary range
-            - Conversational fluency
-            
-            Keep your responses concise to maximize student speaking time.`,
-        },
-      });
-
-      // 2) Trigger the model to start talking with response.create
+      // Trigger the model to start speaking immediately
       sendEventToModel({
         type: "response.create",
         response: {
-          function_call: "auto",
-        },
+          modalities: ["text", "audio"]
+        }
       });
     });
 
@@ -124,24 +117,88 @@ export default function App() {
     // 2) Build entire text conversation from events
     const textConversation = buildTextConversation(events);
 
-    // 3) Call finalEvaluation route
-    const finalResp = await fetch("/finalEvaluation", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ conversation: textConversation }),
-    });
-    const data = await finalResp.json();
+    // 3) Call finalEvaluation route with proper error handling
+    try {
+      const finalResp = await fetch("/finalEvaluation", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ 
+          conversation: textConversation,
+          duration: Date.now() - sessionStartTime
+        }),
+      });
+      const data = await finalResp.json();
 
-    if (data.success) {
-      setEvaluationResults(data.evaluation);
-    } else {
+      if (data.success) {
+        setEvaluationResults(data.evaluation);
+      } else {
+        setEvaluationResults({
+          skills: {
+            pronunciation: { score: 0 },
+            grammar: { score: 0 },
+            vocabulary: { score: 0 },
+            fluency: { score: 0 },
+            listening_comprehension: { score: 0 }
+          },
+          conversation_depth: {
+            topics_discussed: [],
+            complexity_achieved: 0,
+            substantive_discussion: false,
+            longest_response_quality: 0
+          },
+          quantitative_measures: {
+            response_rate: 0,
+            average_response_length: 0,
+            grammar_accuracy: 0,
+            vocabulary_range: 0
+          },
+          final_scores: {
+            overall_score: 0,
+            cefr_level: 'Below A1',
+            recommended_level: 'Beginner'
+          },
+          critical_feedback: {
+            major_weaknesses: ['Unable to complete evaluation'],
+            required_improvements: [],
+            study_recommendations: []
+          }
+        });
+      }
+    } catch (error) {
+      console.error('Evaluation error:', error);
+      // Set error state with proper structure
       setEvaluationResults({
-        overall_summary: "Sorry, we could not parse a final evaluation.",
-        rating: 0,
-        strengths: [],
-        weaknesses: [],
+        skills: {
+          pronunciation: { score: 0 },
+          grammar: { score: 0 },
+          vocabulary: { score: 0 },
+          fluency: { score: 0 },
+          listening_comprehension: { score: 0 }
+        },
+        conversation_depth: {
+          topics_discussed: [],
+          complexity_achieved: 0,
+          substantive_discussion: false,
+          longest_response_quality: 0
+        },
+        quantitative_measures: {
+          response_rate: 0,
+          average_response_length: 0,
+          grammar_accuracy: 0,
+          vocabulary_range: 0
+        },
+        final_scores: {
+          overall_score: 0,
+          cefr_level: 'Below A1',
+          recommended_level: 'Beginner'
+        },
+        critical_feedback: {
+          major_weaknesses: ['Unable to complete evaluation'],
+          required_improvements: [],
+          study_recommendations: []
+        }
       });
     }
   }
@@ -188,6 +245,7 @@ export default function App() {
   function sendUserMessage(text) {
     if (!isSessionActive) return;
 
+    // 1) Add the user's message to conversation
     sendEventToModel({
       type: "conversation.item.create",
       item: {
@@ -197,11 +255,13 @@ export default function App() {
       },
     });
 
+    // 2) Request model response with both text and audio
     sendEventToModel({
       type: "response.create",
       response: {
-        function_call: "auto",
-      },
+        modalities: ["text", "audio"],
+        function_call: "auto"
+      }
     });
   }
 
@@ -219,6 +279,16 @@ export default function App() {
     dataChannel.addEventListener("message", handleMessage);
     return () => dataChannel.removeEventListener("message", handleMessage);
   }, [dataChannel]);
+
+  useEffect(() => {
+    return () => {
+      // Cleanup audio element on unmount
+      if (audioRef.current) {
+        document.body.removeChild(audioRef.current);
+        audioRef.current = null;
+      }
+    };
+  }, []);
 
   return (
     <div className="w-full h-full">

@@ -24,7 +24,9 @@ await server.vite.ready();
 /**
  * 3) Route: ephemeral token for Realtime API
  */
-server.get("/token", async () => {
+server.get("/token", async (request) => {
+  const targetLanguage = request.query.language || 'English';
+  
   const response = await fetch("https://api.openai.com/v1/realtime/sessions", {
     method: "POST",
     headers: {
@@ -34,6 +36,31 @@ server.get("/token", async () => {
     body: JSON.stringify({
       model: "gpt-4o-mini-realtime-preview",
       voice: "verse",
+      instructions: `You are a strict professional language evaluator conducting an oral proficiency interview in ${targetLanguage}.
+        
+        IMPORTANT: When the session begins, introduce yourself in English following this format:
+        "Hello! I'm your language proficiency evaluator. We'll be conducting a rigorous assessment of your ${targetLanguage} skills through conversation. This evaluation will test various aspects of your language ability. Are you ready to begin?"
+
+        After user confirmation, switch completely to ${targetLanguage}.
+        
+        Evaluation structure:
+        1. Basic competency check (greetings, simple personal info)
+        2. Daily scenarios (work, study, routines)
+        3. Abstract discussion (opinions, hypotheticals)
+        4. Complex topics (current events, specialized fields)
+        5. Brief wrap-up
+        
+        YOU MUST:
+        - Push for detailed responses
+        - Challenge the user with increasing complexity
+        - Note when user avoids difficult topics
+        - Track mistakes and simplifications
+        
+        DO NOT:
+        - Accept one-word answers
+        - Simplify unless absolutely necessary
+        - Allow extended silences
+        - Skip evaluation stages`,
     }),
   });
 
@@ -48,7 +75,7 @@ server.get("/token", async () => {
  */
 server.post("/finalEvaluation", async (req, reply) => {
   try {
-    const { conversation } = req.body;
+    const { conversation, duration } = req.body;
     if (!conversation) {
       return reply
         .status(400)
@@ -59,30 +86,71 @@ server.post("/finalEvaluation", async (req, reply) => {
       apiKey: process.env.OPENAI_API_KEY,
     });
 
-    // Define our evaluation schema using zod
-    const EvaluationSchema = z.object({
-      overall_summary: z.string(),
-      rating: z.number().int().min(1).max(10),
-      strengths: z.array(z.string()),
-      weaknesses: z.array(z.string()),
+    // Define detailed evaluation schema
+    const SkillAssessment = z.object({
+      score: z.number().int(),
+      critical_issues: z.array(z.string()),
+      examples: z.array(z.string())
     });
 
-    const systemPrompt = `
-      You are a formal language evaluation assistant for a mock job interview scenario. 
-      The user and assistant engaged in a conversation, guided by prior instructions, 
-      to assess the user's spoken language proficiency.
-      Now, based on the entire conversation transcript, produce a short structured evaluation with:
-      - overall_summary (concise text describing performance)
-      - rating (integer 1-10)
-      - strengths (array of short bullet points)
-      - weaknesses (array of short bullet points)
-      Make sure to be fair, consistent, and professional in your assessment.
-    `;
+    const EvaluationSchema = z.object({
+      conversation_depth: z.object({
+        topics_discussed: z.array(z.string()),
+        complexity_achieved: z.number().int(),
+        substantive_discussion: z.boolean(),
+        longest_response_quality: z.number().int()
+      }),
+      skills: z.object({
+        pronunciation: SkillAssessment,
+        grammar: SkillAssessment,
+        vocabulary: SkillAssessment,
+        fluency: SkillAssessment,
+        listening_comprehension: SkillAssessment
+      }),
+      quantitative_measures: z.object({
+        response_rate: z.number(),
+        average_response_length: z.number(),
+        grammar_accuracy: z.number(),
+        vocabulary_range: z.number().int()
+      }),
+      final_scores: z.object({
+        overall_score: z.number().int(),
+        cefr_level: z.enum(['A1', 'A2', 'B1', 'B2', 'C1', 'C2', 'Below A1']),
+        recommended_level: z.string()
+      }),
+      critical_feedback: z.object({
+        major_weaknesses: z.array(z.string()),
+        required_improvements: z.array(z.string()),
+        study_recommendations: z.array(z.string())
+      })
+    });
 
     const completion = await openai.beta.chat.completions.parse({
       model: "gpt-4o-mini",
       messages: [
-        { role: "system", content: systemPrompt },
+        {
+          role: "system",
+          content: `You are a strict language evaluator analyzing an oral proficiency interview.
+            You must be highly critical and thorough in your assessment.
+            
+            EVALUATION RULES:
+            - If the conversation lacks substance or depth, assign scores of 0
+            - Deduct points heavily for:
+              * Repeated basic mistakes
+              * Avoidance of complex topics
+              * Excessive pausing or hesitation
+              * Limited vocabulary range
+              * Poor listening comprehension
+            
+            - Consider conversation duration of ${duration} seconds when evaluating
+            - Look for evidence of actual language ability, not just memorized phrases
+            - Identify specific examples of errors and issues
+            - Be especially critical of advanced level claims
+            
+            Your evaluation must be detailed and evidence-based. 
+            Do not inflate scores or be overly encouraging.
+            Focus on concrete issues and necessary improvements.`
+        },
         {
           role: "user",
           content: conversation
@@ -90,16 +158,43 @@ server.post("/finalEvaluation", async (req, reply) => {
             .join("\n"),
         },
       ],
-      response_format: zodResponseFormat(EvaluationSchema, "evaluation"),
-      temperature: 0.2,
-      max_tokens: 3000,
+      response_format: zodResponseFormat(EvaluationSchema, "language_evaluation"),
     });
 
     const evaluation = completion.choices[0].message.parsed;
+    
+    // Additional validation checks
+    if (evaluation.conversation_depth.substantive_discussion === false) {
+      evaluation.final_scores.overall_score = 0;
+      evaluation.final_scores.cefr_level = 'Below A1';
+    }
+
+    // Ensure scores align with CEFR levels
+    const cefr_minimums = {
+      'C2': 95,
+      'C1': 85,
+      'B2': 70,
+      'B1': 55,
+      'A2': 35,
+      'A1': 15,
+      'Below A1': 0
+    };
+
+    // Validate CEFR alignment
+    for (const [level, min_score] of Object.entries(cefr_minimums)) {
+      if (evaluation.final_scores.overall_score >= min_score) {
+        evaluation.final_scores.cefr_level = level;
+        break;
+      }
+    }
+
     return { success: true, evaluation };
+
   } catch (err) {
+    console.error("Error in finalEvaluation:", err);
     reply.status(500).send({
-      error: err.message,
+      success: false,
+      error: err.message
     });
   }
 });

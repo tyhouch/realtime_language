@@ -1,3 +1,5 @@
+// SessionControls.jsx
+
 import { useState } from "react";
 
 export default function SessionControls({ isSessionActive, startSession, stopSession, sendUserMessage }) {
