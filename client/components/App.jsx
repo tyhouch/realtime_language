@@ -48,9 +48,13 @@ export default function App() {
     const dc = pc.createDataChannel("evaluation-events");
     setDataChannel(dc);
 
+    // When data channel is open, we have a "live" session
     dc.addEventListener("open", () => {
       setIsSessionActive(true);
       setEvents([]);
+
+      // Send a system prompt instructing the assistant
+      sendSystemPrompt(languageChoice);
     });
 
     dc.addEventListener("message", (e) => {
@@ -81,6 +85,45 @@ export default function App() {
   }
 
   /**
+   * This is our system prompt that the model sees right when the session starts.
+   * We instruct it to greet in English, outline the structure, then switch to
+   * the chosen language, guiding the user step by step.
+   */
+  function sendSystemPrompt(lang) {
+    const systemText = `
+      You are a language evaluation assistant. 
+      Greet the user briefly in English. 
+      Explain you will be conducting a ${lang} language evaluation for a job interview scenario.
+      Outline the structure:
+        1) Quick intro in English (just a few words),
+        2) Switch to ${lang} and ask the user to introduce themselves,
+        3) Ask follow-up questions about their background or interests,
+        4) Possibly discuss a short scenario or role-play in ${lang},
+        5) Then proceed to a wrap-up.
+      Keep your own responses concise, encourage the user to speak as much as possible in ${lang}. 
+      Let's begin with your short greeting in English, then switch to ${lang}.
+    `;
+
+    // 1) System message
+    sendEventToModel({
+      type: "conversation.item.create",
+      item: {
+        type: "message",
+        role: "system",
+        content: [{ type: "text", text: systemText }],
+      },
+    });
+
+    // 2) We ask the model to respond
+    sendEventToModel({
+      type: "response.create",
+      response: {
+        function_call: "auto",
+      },
+    });
+  }
+
+  /**
    * End the session
    * Then call finalEvaluation with full conversation
    */
@@ -95,7 +138,6 @@ export default function App() {
     peerConnection.current = null;
 
     // 2) Build entire text conversation from events
-    // We'll gather user & assistant messages from events
     const textConversation = buildTextConversation(events);
 
     // 3) Call finalEvaluation route
@@ -124,10 +166,6 @@ export default function App() {
    * Helper: gather user & assistant text from events
    */
   function buildTextConversation(allEvents) {
-    // Each event might have a 'type' = "conversation.item.create"
-    // with item.role = "user" or "assistant"
-    // and item.content = [ { text: string }, ... ]
-    // We'll ignore function calls or other stuff.
     const textOnly = [];
     for (let i = allEvents.length - 1; i >= 0; i--) {
       const ev = allEvents[i];
@@ -145,7 +183,7 @@ export default function App() {
         }
       }
     }
-    // Reverse it so earliest messages come first
+    // Reverse so earliest messages come first
     return textOnly.reverse();
   }
 
@@ -193,7 +231,6 @@ export default function App() {
     const handleMessage = (e) => {
       const event = JSON.parse(e.data);
       setEvents((prev) => [event, ...prev]);
-      // if we needed function calls, we'd parse them here
     };
 
     dataChannel.addEventListener("message", handleMessage);

@@ -46,7 +46,7 @@ server.get("/token", async () => {
 /**
  * 4) Route: finalEvaluation
  *    Uses the conversation text to produce a language evaluation
- *    with structured output from GPT-4o style models
+ *    with structured output from GPT-4o style models.
  */
 server.post("/finalEvaluation", async (req, reply) => {
   try {
@@ -67,22 +67,34 @@ server.post("/finalEvaluation", async (req, reply) => {
       overall_summary: z.string(),
       rating: z.number().int().min(1).max(10),
       strengths: z.array(z.string()),
-      weaknesses: z.array(z.string())
+      weaknesses: z.array(z.string()),
     });
+
+    // We provide a more explicit system message to reflect a job interview scenario
+    const systemPrompt = `
+      You are a formal language evaluation assistant for a mock job interview scenario. 
+      The user and assistant engaged in a conversation in order to assess the user's spoken language proficiency.
+      Now, based on the entire conversation transcript, produce a short structured evaluation with:
+      - overall_summary (concise text describing performance)
+      - rating (integer 1-10)
+      - strengths (array of short bullet points)
+      - weaknesses (array of short bullet points)
+      Make sure to be fair, consistent, and professional in your assessment.
+    `;
 
     const completion = await openai.beta.chat.completions.parse({
       model: "gpt-4o-mini",
       messages: [
         {
           role: "system",
-          content: "You are a language evaluation assistant. Evaluate the conversation and provide structured feedback."
+          content: systemPrompt,
         },
         {
           role: "user",
           content: conversation
             .map((c) => `[${c.role.toUpperCase()}]: ${c.text}`)
-            .join("\n")
-        }
+            .join("\n"),
+        },
       ],
       response_format: zodResponseFormat(EvaluationSchema, "evaluation"),
       temperature: 0.2,
@@ -91,7 +103,6 @@ server.post("/finalEvaluation", async (req, reply) => {
 
     const evaluation = completion.choices[0].message.parsed;
     return { success: true, evaluation };
-
   } catch (err) {
     reply.status(500).send({
       error: err.message,
